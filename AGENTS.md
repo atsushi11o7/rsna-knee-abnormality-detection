@@ -45,7 +45,7 @@ DICOM形式の膝MRI画像から異常を検出するモデルを開発する。
 
 - `data/` … コンペ配布物・参考資料一式(gitignore対象)
 - `docs/` … ローカル専用メモ(gitignore対象。例外なし)
-- `submission/` … 提出物一式(`main.py` 等、gitignore対象)
+- `submission/` … 提出物一式(Kaggle Notebook の `.ipynb` と、添付する Dataset 用の重み・コード等。gitignore対象)
 - `.devcontainer/` … 開発環境定義
 - `src/` … モデル学習・推論コードの置き場所(パッケージ名は検討中)
 
