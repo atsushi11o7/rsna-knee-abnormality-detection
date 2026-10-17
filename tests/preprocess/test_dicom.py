@@ -32,3 +32,7 @@ def test_pick_indices_caps_and_spans():
 def test_to_uint8_range():
     out = to_uint8(np.random.rand(4, 32, 32).astype(np.float32) * 1000)
     assert out.dtype == np.uint8 and out.max() == 255
+
+
+def test_pick_indices_zero_keeps_all():
+    assert list(pick_indices(320, 0)) == list(range(320))

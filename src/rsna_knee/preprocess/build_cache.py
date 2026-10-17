@@ -5,7 +5,7 @@ archive member by member and only the cropped/resized stacks are written to disk
 
 Usage:
     python -m rsna_knee.preprocess.build_cache --zip data/rsna-knee-abnormality-detection.zip \
-        --out data/cache/v1 --split train --workers 12
+        --out data/cache/v2 --split train --workers 12
 """
 
 from __future__ import annotations
@@ -68,11 +68,11 @@ def process_study(study: str, series: dict[str, list[str]], out: str, cfg: dict)
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--zip", default="data/rsna-knee-abnormality-detection.zip")
-    p.add_argument("--out", default="data/cache/v1")
+    p.add_argument("--out", default="data/cache/v2")
     p.add_argument("--split", choices=["train", "test"], default="train")
     p.add_argument("--crop-mm", type=float, default=150.0)
     p.add_argument("--size", type=int, default=320)
-    p.add_argument("--max-slices", type=int, default=64)
+    p.add_argument("--max-slices", type=int, default=0, help="0 keeps all slices")
     p.add_argument("--workers", type=int, default=12)
     p.add_argument("--limit", type=int, default=0, help="process only the first N studies")
     args = p.parse_args()

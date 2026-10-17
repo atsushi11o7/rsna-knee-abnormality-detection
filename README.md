@@ -28,7 +28,7 @@ kaggle competitions download rsna-knee-abnormality-detection -p data
 zip は 265GB、展開すると 570GB になる。展開せず、zip から直接読んで前処理キャッシュを作る。
 
 ```bash
-python -m rsna_knee.preprocess.build_cache --split train --out data/cache/v1 --workers 12
+python -m rsna_knee.preprocess.build_cache --split train --out data/cache/v2 --workers 12
 ```
 
 ## ディレクトリ構成

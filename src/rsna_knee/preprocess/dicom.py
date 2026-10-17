@@ -66,7 +66,8 @@ def to_uint8(stack: np.ndarray, lo_pct: float = 0.5, hi_pct: float = 99.5) -> np
 
 
 def pick_indices(n: int, max_slices: int) -> np.ndarray:
-    if n <= max_slices:
+    """Evenly subsample to at most `max_slices`; `max_slices <= 0` keeps every slice."""
+    if max_slices <= 0 or n <= max_slices:
         return np.arange(n)
     return np.unique(np.linspace(0, n - 1, max_slices).round().astype(int))
 
