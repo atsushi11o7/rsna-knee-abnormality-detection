@@ -6,14 +6,15 @@ __pycache__/
 
 .env
 
-data/
-outputs/
-results/
-docs/
-logs/
+# Anchored to the repo root so that e.g. src/rsna_knee/data/ is still tracked.
+/data/
+/outputs/
+/results/
+/docs/
+/logs/
 
 *.tar.gz
-submission/
+/submission/
 nohup.out
 
 .claude/
