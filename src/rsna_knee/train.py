@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import time
 from pathlib import Path
 
@@ -27,12 +28,7 @@ from rsna_knee.data.folds import make_folds
 from rsna_knee.labels.public import TARGETS, load_gold, load_train_labels
 from rsna_knee.metrics import macro_auc
 from rsna_knee.models.model import KneeModel
-
-
-def to_device(batch: dict, device: torch.device) -> dict:
-    return {
-        k: v.to(device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()
-    }
+from rsna_knee.utils import to_device
 
 
 def jitter_intensity(images: torch.Tensor, strength: float) -> torch.Tensor:
@@ -102,6 +98,8 @@ def main(cfg: DictConfig) -> None:
         y, w = y.iloc[: cfg.data.limit], w.iloc[: cfg.data.limit]
     folds = make_folds(pd.read_csv(cfg.data.train_csv), y, cfg.data.n_folds, cfg.seed)
     folds.to_csv(out / "folds.csv")
+    # 推論時に同じ前処理をかけられるよう、キャッシュの設定をモデルと一緒に保存する
+    shutil.copy(Path(cfg.data.cache_dir) / "config.json", out / "cache_config.json")
     gold = load_gold(Path(cfg.data.train_csv))
     index = build_index(Path(cfg.data.cache_dir), Path(cfg.data.series_csv), "train")
 
