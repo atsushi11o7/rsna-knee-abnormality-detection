@@ -79,7 +79,7 @@ def eval_loader(ids: list[str], index: dict, cfg: DictConfig) -> DataLoader:
     return DataLoader(
         ds,
         batch_size=cfg.eval.batch_size,
-        num_workers=cfg.train.num_workers,
+        num_workers=cfg.eval.num_workers,
         collate_fn=collate,
         pin_memory=True,
     )

@@ -15,7 +15,7 @@ train:
   epochs: 12
   batch_size: 8
   n_windows: 32
-  num_workers: 8
+  num_workers: 6
   lr: 3.0e-4       # 集約部分
   encoder_lr: 3.0e-5
   weight_decay: 0.05
@@ -24,6 +24,7 @@ train:
   intensity_jitter: 0.1
 
 eval:
+  num_workers: 4
   batch_size: 8
   windows_per_series: 16
 
