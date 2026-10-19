@@ -47,7 +47,10 @@ class WindowEncoder(nn.Module):
         self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
         dim = self.backbone.num_features
-        self.proj = nn.Sequential(nn.LayerNorm(2 * dim), nn.Linear(2 * dim, out_dim))
+        # DINOv2 の特徴は全 Study に共通する成分が大きく(Study 間のコサイン類似度 0.93)、
+        # 窓ごとの LayerNorm では差が残らず集約後の出力が一定値に潰れた。
+        # BatchNorm で次元ごとに標準化し、Study 間の差を取り出す
+        self.proj = nn.Sequential(nn.BatchNorm1d(2 * dim), nn.Linear(2 * dim, out_dim))
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """窓をエンコードする。

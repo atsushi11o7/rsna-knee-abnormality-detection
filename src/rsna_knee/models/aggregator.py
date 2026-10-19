@@ -58,8 +58,12 @@ class StudyAggregator(nn.Module):
         self.cross = nn.MultiheadAttention(dim, n_heads, dropout, batch_first=True)
         self.query_norm = nn.LayerNorm(dim)
         # ラベルごとに別の出力重みを持つ(クエリ i の出力 → ラベル i のロジット)
-        self.head_w = nn.Parameter(torch.zeros(n_labels, dim))
+        self.head_w = nn.Parameter(torch.randn(n_labels, dim) * 0.02)
         self.head_b = nn.Parameter(torch.zeros(n_labels))
+        # nn.Embedding の既定初期化(標準偏差 1)だと、画像特徴(約 0.6)より大きくなり、
+        # 全 Study のトークンが断面などの属性で決まって出力が一定値に潰れた
+        for emb in (self.plane_emb, self.fat_emb):
+            nn.init.normal_(emb.weight, std=0.02)
 
     def forward(
         self,
