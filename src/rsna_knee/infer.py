@@ -1,6 +1,6 @@
 """隠しテストを前処理して推論し、submission.csv を書く。Kaggle の提出 Notebook から呼ぶ。
 
-モデルのディレクトリには、学習時の出力(`model.pt` と `.hydra/config.yaml`)と、
+モデルのディレクトリには、学習時の出力(`model.pt` と `config.yaml`(学習時は `.hydra/` 内))と、
 キャッシュの設定 `cache_config.json` を置く。前処理・窓選択・モデル設定は学習時のものを使う。
 
 Usage:
@@ -34,7 +34,11 @@ def load_model(model_dir: Path, device: torch.device) -> tuple[KneeModel, dict]:
     事前学習の重みはチェックポイントに含まれるので、ダウンロードはしない。
     """
     # Kaggle の環境に Hydra / OmegaConf が無くても読めるよう、PyYAML で読む
-    cfg = yaml.safe_load((model_dir / ".hydra" / "config.yaml").read_text())
+    # Kaggle Dataset ではドット始まりのフォルダが落ちることがあるので、直下の config.yaml を優先する
+    path = model_dir / "config.yaml"
+    if not path.exists():
+        path = model_dir / ".hydra" / "config.yaml"
+    cfg = yaml.safe_load(path.read_text())
     enc = cfg["model"]["encoder"] | {"pretrained": False}
     model = KneeModel(enc, cfg["model"]["aggregator"])
     model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu"))
