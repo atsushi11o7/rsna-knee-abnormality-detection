@@ -51,3 +51,19 @@ def test_param_groups_cover_every_parameter_once(model):
     assert len(ids) == len(set(ids)) == len(list(model.parameters()))
     enc = {id(p) for p in model.encoder.backbone.parameters()}
     assert all(g["lr"] == 1e-5 for g in groups if any(id(p) in enc for p in g["params"]))
+
+
+@pytest.mark.parametrize("agg", ["transformer", "mil"])
+def test_both_aggregators_ignore_padding(agg):
+    torch.manual_seed(0)
+    cfg = {"type": agg, "dropout": 0.0} | ({} if agg == "mil" else {"n_layers": 1, "n_heads": 4})
+    m = KneeModel(ENCODER, cfg).eval()
+    batch = _batch(k_valid=(3,))
+    with torch.no_grad():
+        ref = m(batch)
+        padded = {
+            key: torch.cat([v, torch.zeros_like(v[:, :2]) if key == "mask" else v[:, :2]], 1)
+            for key, v in batch.items()
+        }
+        out = m(padded)
+    assert out.shape == (1, 12) and torch.allclose(ref, out, atol=1e-5)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from rsna_knee.models.aggregator import StudyAggregator
+from rsna_knee.models.aggregator import MILAggregator, StudyAggregator
 from rsna_knee.models.encoder import WindowEncoder
 
 
@@ -14,14 +14,17 @@ class KneeModel(nn.Module):
 
     Args:
         encoder: 窓エンコーダの設定(WindowEncoder の引数)。
-        aggregator: 集約部分の設定(StudyAggregator の引数。`dim` は自動で合わせる)。
+        aggregator: 集約部分の設定。`type` が "transformer"(既定、StudyAggregator)か
+            "mil"(MILAggregator)を選び、残りはそのクラスの引数。`dim` は自動で合わせる。
     """
 
     def __init__(self, encoder: dict | None = None, aggregator: dict | None = None):
         super().__init__()
         self.encoder = WindowEncoder(**(encoder or {}))
         dim = self.encoder.proj[-1].out_features
-        self.aggregator = StudyAggregator(dim=dim, **(aggregator or {}))
+        agg = dict(aggregator or {})
+        cls = {"transformer": StudyAggregator, "mil": MILAggregator}[agg.pop("type", "transformer")]
+        self.aggregator = cls(dim=dim, **agg)
 
     def forward(self, batch: dict) -> torch.Tensor:
         """推論する。

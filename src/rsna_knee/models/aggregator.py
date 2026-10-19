@@ -92,3 +92,47 @@ class StudyAggregator(nn.Module):
         out, _ = self.cross(q, x, x, key_padding_mask=pad, need_weights=False)
         out = self.query_norm(out + q)
         return (out * self.head_w).sum(-1) + self.head_b
+
+
+class MILAggregator(nn.Module):
+    """所見ごとの attention プーリング(MIL)で窓特徴をまとめる。
+
+    StudyAggregator から Transformer とラベルクエリを除き、所見ごとに「どの窓を重視するか」
+    の重みだけを学習する。入力(窓特徴 + 属性埋め込み)は StudyAggregator と同じにして、
+    集約方法だけを比較できるようにしている。
+
+    Args:
+        dim: 特徴の次元。
+        n_labels: 出力ラベル数。
+        hidden: attention スコアを出す中間層の次元。
+        dropout: ドロップアウト率。
+    """
+
+    def __init__(self, dim: int = 384, n_labels: int = 12, hidden: int = 256, dropout: float = 0.1):
+        super().__init__()
+        self.plane_emb = nn.Embedding(N_PLANES, dim)
+        self.fat_emb = nn.Embedding(2, dim)
+        self.pos_emb = PositionEmbedding(dim)
+        for emb in (self.plane_emb, self.fat_emb):
+            nn.init.normal_(emb.weight, std=0.02)
+        self.norm = nn.LayerNorm(dim)
+        self.att = nn.Sequential(
+            nn.Linear(dim, hidden), nn.Tanh(), nn.Dropout(dropout), nn.Linear(hidden, n_labels)
+        )
+        self.head_w = nn.Parameter(torch.randn(n_labels, dim) * 0.02)
+        self.head_b = nn.Parameter(torch.zeros(n_labels))
+
+    def forward(
+        self,
+        feats: torch.Tensor,
+        plane: torch.Tensor,
+        fat_sup: torch.Tensor,
+        rel_pos: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """集約してロジットを返す。引数は StudyAggregator.forward と同じ。"""
+        x = feats + self.plane_emb(plane) + self.fat_emb(fat_sup) + self.pos_emb(rel_pos)
+        h = self.norm(x)
+        a = self.att(h).masked_fill(~mask.unsqueeze(-1), float("-inf")).softmax(dim=1)
+        pooled = torch.einsum("bkn,bkd->bnd", a, h)
+        return (pooled * self.head_w).sum(-1) + self.head_b
