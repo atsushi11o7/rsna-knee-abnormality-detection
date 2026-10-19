@@ -74,8 +74,10 @@ def predict(model: KneeModel, loader: DataLoader, device: torch.device) -> pd.Da
     return pd.DataFrame(np.concatenate(probs), index=ids, columns=TARGETS)
 
 
-def eval_loader(ids: list[str], index: dict, cfg: DictConfig) -> DataLoader:
-    ds = KneeStudyDataset(ids, index, train=False, windows_per_series=cfg.eval.windows_per_series)
+def eval_loader(
+    ids: list[str], index: dict, cfg: DictConfig, windows_per_series: int
+) -> DataLoader:
+    ds = KneeStudyDataset(ids, index, train=False, windows_per_series=windows_per_series)
     return DataLoader(
         ds,
         batch_size=cfg.eval.batch_size,
@@ -118,8 +120,17 @@ def main(cfg: DictConfig) -> None:
         pin_memory=True,
         persistent_workers=cfg.train.num_workers > 0,
     )
-    valid_loader = eval_loader(valid_ids, index, cfg) if valid_ids else None
-    gold_loader = eval_loader(list(gold.index), index, cfg)
+    # 評価はディスク読み込みが律速(全窓で 1 回約 10 分)。途中経過は窓を減らして数エポックおきに測り、
+    # 最終エポックだけ全窓で評価して保存する
+    eval_sets = {
+        name: {
+            "quick": eval_loader(ids, index, cfg, cfg.eval.quick_windows_per_series),
+            "full": eval_loader(ids, index, cfg, cfg.eval.windows_per_series),
+        }
+        for name, ids in [("valid", valid_ids), ("gold", list(gold.index))]
+        if ids
+    }
+    truth = {"valid": y, "gold": gold}
 
     model = KneeModel(
         OmegaConf.to_container(cfg.model.encoder), OmegaConf.to_container(cfg.model.aggregator)
@@ -150,22 +161,26 @@ def main(cfg: DictConfig) -> None:
             losses.append(loss.item())
 
         log = {"epoch": epoch, "train_loss": float(np.mean(losses)), "time": time.time() - t0}
-        gold_pred = predict(model, gold_loader, device)
-        log["gold_auc"], gold_per = macro_auc(gold, gold_pred)
-        if valid_loader is not None:
-            oof = predict(model, valid_loader, device)
-            log["valid_auc"], valid_per = macro_auc(y.loc[oof.index], oof)
+        last = epoch == cfg.train.epochs - 1
+        if last or (epoch + 1) % cfg.eval.every == 0:
+            kind = "full" if last else "quick"
+            preds, per = {}, {}
+            for name, loaders in eval_sets.items():
+                preds[name] = predict(model, loaders[kind], device)
+                auc, per[name] = macro_auc(truth[name].loc[preds[name].index], preds[name])
+                log[f"{name}_auc"] = auc
+            log["eval"] = kind
         print(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in log.items()}))
         with open(out / "log.jsonl", "a") as f:
             f.write(json.dumps(log) + "\n")
 
     # 選択は行わず最終エポックを使う(gold-58 は小さすぎて選択に使うと過学習する)
     torch.save(model.state_dict(), out / "model.pt")
-    gold_pred.to_csv(out / "gold_pred.csv", index_label="StudyInstanceUID")
-    summary = {"gold_auc": log["gold_auc"], "gold_per_label": gold_per}
-    if valid_loader is not None:
-        oof.to_csv(out / "oof.csv", index_label="StudyInstanceUID")
-        summary |= {"valid_auc": log["valid_auc"], "valid_per_label": valid_per}
+    files = {"gold": "gold_pred.csv", "valid": "oof.csv"}
+    summary = {}
+    for name in eval_sets:
+        preds[name].to_csv(out / files[name], index_label="StudyInstanceUID")
+        summary |= {f"{name}_auc": log[f"{name}_auc"], f"{name}_per_label": per[name]}
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
 
 

@@ -26,7 +26,9 @@ train:
 eval:
   num_workers: 4
   batch_size: 8
-  windows_per_series: 16
+  windows_per_series: 16        # 最終エポックの評価(OOF 保存)
+  quick_windows_per_series: 4   # 途中経過の評価
+  every: 3                      # 途中経過を測るエポック間隔
 
 model:
   encoder:
