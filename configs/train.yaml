@@ -1,0 +1,46 @@
+exp_name: baseline
+fold: 0            # -1 なら全データで学習(OOF なし)
+seed: 42
+
+data:
+  cache_dir: data/cache/v2
+  series_csv: data/csv/train_series.csv
+  train_csv: data/csv/train.csv
+  label_source: steven_v4
+  silent_weight: 0.5
+  n_folds: 5
+  limit: 0         # デバッグ用。先頭 N Study だけ使う
+
+train:
+  epochs: 12
+  batch_size: 8
+  n_windows: 32
+  num_workers: 8
+  lr: 3.0e-4       # 集約部分
+  encoder_lr: 3.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.05
+  grad_clip: 1.0
+  intensity_jitter: 0.1
+
+eval:
+  batch_size: 8
+  windows_per_series: 16
+
+model:
+  encoder:
+    backbone: vit_small_patch14_dinov2.lvd142m
+    img_size: 224
+    out_dim: 384
+    pretrained: true
+    grad_checkpointing: false
+  aggregator:
+    n_layers: 2
+    n_heads: 6
+    dropout: 0.1
+
+hydra:
+  run:
+    dir: outputs/${exp_name}/fold${fold}
+  job:
+    chdir: false
