@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -47,13 +48,13 @@ def load_model(model_dir: Path, device: torch.device) -> tuple[KneeModel, dict]:
 
 @torch.no_grad()
 def predict(
-    model: KneeModel, loader: DataLoader, device: torch.device, dtype: torch.dtype
+    model: KneeModel, loader: DataLoader, device: torch.device, dtype: torch.dtype | None
 ) -> pd.DataFrame:
-    """確率(sigmoid 後)を Study ごとに返す。"""
+    """確率(sigmoid 後)を Study ごとに返す。`dtype` が None なら float32 のまま計算する。"""
     ids, probs = [], []
     for batch in loader:
         batch = to_device(batch, device)
-        with torch.autocast("cuda", dtype=dtype):
+        with torch.autocast(device.type, dtype=dtype, enabled=dtype is not None):
             logits = model(batch)
         probs.append(torch.sigmoid(logits.float()).cpu().numpy())
         ids.extend(batch["study_id"])
@@ -96,9 +97,15 @@ def run(
         submission と同じ内容の DataFrame。
     """
     t0 = time.time()
-    device = torch.device("cuda")
-    # T4 / P100 は bf16 を持たない。エミュレーションだと極端に遅くなるので fp16 を使う
-    dtype = torch.bfloat16 if _native_bf16() else torch.float16
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        # T4 / P100 は bf16 を持たない。エミュレーションだと極端に遅くなるので fp16 を使う
+        dtype = torch.bfloat16 if _native_bf16() else torch.float16
+    else:
+        # Kaggle の GPU 待ちが長いときの代替。CPU の低精度演算は環境依存なので float32
+        device, dtype = torch.device("cpu"), None
+        torch.set_num_threads(os.cpu_count() or 4)
+    print(f"device: {device}, dtype: {dtype}", flush=True)
 
     cache_cfg = json.loads((model_dirs[0] / "cache_config.json").read_text())
     for d in model_dirs[1:]:
@@ -126,12 +133,17 @@ def run(
             windows_per_series=cfg["eval"]["windows_per_series"],
         )
         loader = DataLoader(
-            ds, batch_size=batch_size, num_workers=workers, collate_fn=collate, pin_memory=True
+            ds,
+            batch_size=batch_size,
+            num_workers=workers,
+            collate_fn=collate,
+            pin_memory=device.type == "cuda",
         )
         preds.append(predict(model, loader, device, dtype))
         print(f"model {d}: {time.time() - t0:.0f}s", flush=True)
         del model
-        torch.cuda.empty_cache()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     pred = sum(preds) / len(preds)
     sub = pd.DataFrame(0.5, index=study_ids, columns=TARGETS)
