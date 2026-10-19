@@ -129,33 +129,36 @@ def check_config(out: Path, cfg: dict) -> None:
     _write_json_atomic(path, cfg)
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--src", default="data/rsna-knee-abnormality-detection.zip")
-    p.add_argument("--out", default="data/cache/v2")
-    p.add_argument("--split", choices=["train", "test"], default="train")
-    p.add_argument("--crop-mm", type=float, default=150.0)
-    p.add_argument("--size", type=int, default=320)
-    p.add_argument("--max-slices", type=int, default=0, help="0 keeps all slices")
-    p.add_argument("--workers", type=int, default=12)
-    p.add_argument("--limit", type=int, default=0, help="process only the first N studies")
-    p.add_argument("--retry-failed", action="store_true", help="redo studies with failed series")
-    args = p.parse_args()
+def build_cache(
+    src: str,
+    out: Path,
+    split: str,
+    cfg: dict,
+    workers: int = 12,
+    limit: int = 0,
+    retry_failed: bool = False,
+) -> pd.DataFrame:
+    """キャッシュを作り、全シリーズのメタ情報を返す(`{split}_series_meta.parquet` にも保存)。
 
-    cfg = {"crop_mm": args.crop_mm, "size": args.size, "max_slices": args.max_slices}
-    out = Path(args.out)
+    Args:
+        src: zip のパス、または展開済みデータセットのルート。
+        out: 出力先。
+        split: "train" または "test"。
+        cfg: `crop_mm`、`size`、`max_slices`。
+        workers: 並列プロセス数。
+        limit: 0 以外なら先頭 N Study だけ処理する。
+        retry_failed: 失敗シリーズを含む処理済み Study をやり直す。
+    """
     out.mkdir(parents=True, exist_ok=True)
     check_config(out, cfg)
-
-    studies = index_studies(list_dicoms(args.src, args.split))
-    keys = sorted(studies)[: args.limit or None]
+    studies = index_studies(list_dicoms(src, split))
+    keys = sorted(studies)[: limit or None]
     print(f"{len(keys)} studies, {sum(len(studies[k]) for k in keys)} series", flush=True)
 
     rows, t0 = [], time.time()
-    with ProcessPoolExecutor(args.workers, initializer=_init_worker, initargs=(args.src,)) as ex:
+    with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(src,)) as ex:
         futs = [
-            ex.submit(process_study, k, dict(studies[k]), str(out), cfg, args.retry_failed)
-            for k in keys
+            ex.submit(process_study, k, dict(studies[k]), str(out), cfg, retry_failed) for k in keys
         ]
         for i, fut in enumerate(as_completed(futs), 1):
             rows.extend(fut.result())
@@ -168,8 +171,27 @@ def main() -> None:
                 )
 
     df = pd.DataFrame(rows)
-    df.to_parquet(out / f"{args.split}_series_meta.parquet", index=False)
+    df.to_parquet(out / f"{split}_series_meta.parquet", index=False)
     print(f"done: {df.ok.sum()}/{len(df)} series ok", flush=True)
+    return df
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--src", default="data/rsna-knee-abnormality-detection.zip")
+    p.add_argument("--out", default="data/cache/v2")
+    p.add_argument("--split", choices=["train", "test"], default="train")
+    p.add_argument("--crop-mm", type=float, default=150.0)
+    p.add_argument("--size", type=int, default=320)
+    p.add_argument("--max-slices", type=int, default=0, help="0 keeps all slices")
+    p.add_argument("--workers", type=int, default=12)
+    p.add_argument("--limit", type=int, default=0, help="process only the first N studies")
+    p.add_argument("--retry-failed", action="store_true", help="redo studies with failed series")
+    args = p.parse_args()
+    cfg = {"crop_mm": args.crop_mm, "size": args.size, "max_slices": args.max_slices}
+    build_cache(
+        args.src, Path(args.out), args.split, cfg, args.workers, args.limit, args.retry_failed
+    )
 
 
 if __name__ == "__main__":
