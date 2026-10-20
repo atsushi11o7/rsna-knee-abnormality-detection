@@ -26,6 +26,7 @@ from rsna_knee.data.dataset import KneeStudyDataset, build_index, collate
 from rsna_knee.labels.public import TARGETS
 from rsna_knee.models.model import KneeModel
 from rsna_knee.preprocess.build_cache import build_cache
+from rsna_knee.tta import mirror_batch
 from rsna_knee.utils import to_device
 
 
@@ -48,15 +49,24 @@ def load_model(model_dir: Path, device: torch.device) -> tuple[KneeModel, dict]:
 
 @torch.no_grad()
 def predict(
-    model: KneeModel, loader: DataLoader, device: torch.device, dtype: torch.dtype | None
+    model: KneeModel,
+    loader: DataLoader,
+    device: torch.device,
+    dtype: torch.dtype | None,
+    mirror: bool = False,
 ) -> pd.DataFrame:
-    """確率(sigmoid 後)を Study ごとに返す。`dtype` が None なら float32 のまま計算する。"""
+    """確率(sigmoid 後)を Study ごとに返す。
+
+    `dtype` が None なら float32 のまま計算する。`mirror` なら左右反転した入力の確率と平均する。
+    """
     ids, probs = [], []
     for batch in loader:
         batch = to_device(batch, device)
         with torch.autocast(device.type, dtype=dtype, enabled=dtype is not None):
-            logits = model(batch)
-        probs.append(torch.sigmoid(logits.float()).cpu().numpy())
+            p = torch.sigmoid(model(batch).float())
+            if mirror:
+                p = (p + torch.sigmoid(model(mirror_batch(batch)).float())) / 2
+        probs.append(p.cpu().numpy())
         ids.extend(batch["study_id"])
     return pd.DataFrame(np.concatenate(probs), index=ids, columns=TARGETS)
 
@@ -79,6 +89,8 @@ def run(
     batch_size: int = 4,
     limit: int = 0,
     src: str | None = None,
+    windows_per_series: int | None = None,
+    mirror: bool = False,
 ) -> pd.DataFrame:
     """前処理 → 推論 → 複数モデルの平均 → submission の書き出しまでを行う。
 
@@ -92,6 +104,8 @@ def run(
         batch_size: 推論のバッチサイズ(Study 数)。
         limit: 0 以外なら先頭 N Study だけ処理する(動作確認用)。
         src: DICOM の読み込み元(zip など)。省略時は `data_dir`。手元で train を zip から読む検証用。
+        windows_per_series: 1 シリーズあたりの最大窓数。省略時は学習時の評価設定(16)。
+        mirror: ミラー TTA を使う(fold 0 で検証 AUC +0.003)。
 
     Returns:
         submission と同じ内容の DataFrame。
@@ -131,7 +145,7 @@ def run(
             present,
             index,
             train=False,
-            windows_per_series=cfg["eval"]["windows_per_series"],
+            windows_per_series=windows_per_series or cfg["eval"]["windows_per_series"],
         )
         loader = DataLoader(
             ds,
@@ -140,7 +154,7 @@ def run(
             collate_fn=collate,
             pin_memory=device.type == "cuda",
         )
-        preds.append(predict(model, loader, device, dtype))
+        preds.append(predict(model, loader, device, dtype, mirror))
         print(f"model {d}: {time.time() - t0:.0f}s", flush=True)
         del model
         if device.type == "cuda":
@@ -167,6 +181,8 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--src", default=None)
+    p.add_argument("--windows-per-series", type=int, default=None)
+    p.add_argument("--mirror", action="store_true")
     args = p.parse_args()
     run(
         args.data_dir,
@@ -178,6 +194,8 @@ def main() -> None:
         args.batch_size,
         args.limit,
         args.src,
+        args.windows_per_series,
+        args.mirror,
     )
 
 
