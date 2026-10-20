@@ -14,3 +14,10 @@ def test_macro_auc_binarizes_soft_labels():
     y = pd.DataFrame({"a": [0.25, 0.9, 0.03, 0.7]})
     p = pd.DataFrame({"a": [0.1, 0.9, 0.2, 0.8]})
     assert macro_auc(y, p)[0] == 1.0
+
+
+def test_macro_auc_mask_excludes_cells():
+    y = pd.DataFrame({"a": [0, 1, 0, 1]})
+    p = pd.DataFrame({"a": [0.1, 0.9, 0.95, 0.8]})
+    m = pd.DataFrame({"a": [True, True, False, True]})
+    assert macro_auc(y, p)[0] < 1.0 and macro_auc(y, p, mask=m)[0] == 1.0
