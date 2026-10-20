@@ -20,3 +20,12 @@ def test_weighted_bce_ignores_zero_weight_cells():
 def test_cosine_with_warmup_shape():
     f = cosine_with_warmup(total=100, warmup=10)
     assert f(0) == 0.1 and f(9) == 1.0 and abs(f(99)) < 1e-2
+
+
+def test_random_affine_keeps_shape_and_is_noop_when_disabled():
+    from rsna_knee.train import random_affine
+
+    x = torch.randint(0, 256, (2, 3, 3, 16, 16), dtype=torch.uint8)
+    assert torch.equal(random_affine(x, 0, 0, 0), x)
+    out = random_affine(x, 10, 0.1, 0.05)
+    assert out.shape == x.shape and out.dtype == torch.uint8

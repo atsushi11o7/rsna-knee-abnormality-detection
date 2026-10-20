@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 
 from rsna_knee.data.dataset import KneeStudyDataset, build_index, collate
 from rsna_knee.data.folds import make_folds
-from rsna_knee.labels.public import TARGETS, load_gold, load_train_labels
+from rsna_knee.labels.public import TARGETS, load_gold, load_source, load_train_labels
 from rsna_knee.metrics import macro_auc
 from rsna_knee.models.model import KneeModel
 from rsna_knee.utils import to_device
@@ -39,6 +39,40 @@ def jitter_intensity(images: torch.Tensor, strength: float) -> torch.Tensor:
     gain = 1 + (torch.rand(shape, device=images.device) * 2 - 1) * strength
     bias = (torch.rand(shape, device=images.device) * 2 - 1) * strength * 255
     return (images.float() * gain + bias).clamp(0, 255).to(torch.uint8)
+
+
+def random_affine(
+    images: torch.Tensor, rotate_deg: float, scale: float, shift: float
+) -> torch.Tensor:
+    """窓ごとにランダムな回転・拡大縮小・平行移動をかける(uint8 のまま返す)。
+
+    3 チャネル(3 スライス)には同じ変換がかかる。全て 0 なら何もしない。
+
+    Args:
+        images: (B, K, 3, H, W) uint8。
+        rotate_deg: 回転角の最大値(度)。
+        scale: 拡大縮小率の最大値(0.1 なら 0.9〜1.1 倍)。
+        shift: 平行移動の最大値(画像の一辺に対する割合)。
+    """
+    if rotate_deg <= 0 and scale <= 0 and shift <= 0:
+        return images
+    b, k = images.shape[:2]
+    x = images.flatten(0, 1).float()
+    n = x.shape[0]
+
+    def u(m: float) -> torch.Tensor:
+        return (torch.rand(n, device=x.device) * 2 - 1) * m
+
+    ang = u(math.radians(rotate_deg))
+    s = 1 + u(scale)
+    cos, sin = torch.cos(ang) / s, torch.sin(ang) / s
+    # affine_grid の座標は -1〜1 なので、画像幅に対する割合を 2 倍する
+    theta = torch.stack(
+        [torch.stack([cos, -sin, u(2 * shift)], -1), torch.stack([sin, cos, u(2 * shift)], -1)], 1
+    )
+    grid = F.affine_grid(theta, list(x.shape), align_corners=False)
+    out = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+    return out.round().clamp(0, 255).to(torch.uint8).view(b, k, *images.shape[2:])
 
 
 def weighted_bce(logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -96,7 +130,13 @@ def main(cfg: DictConfig) -> None:
     )
     if cfg.data.limit:
         y, w = y.iloc[: cfg.data.limit], w.iloc[: cfg.data.limit]
-    folds = make_folds(pd.read_csv(cfg.data.train_csv), y, cfg.data.n_folds, cfg.seed)
+    # fold は学習ラベルに関係なく固定のソースで作る。ラベルを変えると検証対象まで変わり、
+    # 「ラベルの効果」と「検証対象の違い」を分けられなくなるため
+    fold_y, _ = load_train_labels(cfg.data.fold_label_source, train_csv=Path(cfg.data.train_csv))
+    folds = make_folds(
+        pd.read_csv(cfg.data.train_csv), fold_y.loc[y.index], cfg.data.n_folds, cfg.data.fold_seed
+    )
+    addressed = load_source(cfg.data.label_source).addressed.loc[y.index]
     folds.to_csv(out / "folds.csv")
     # 推論時に同じ前処理をかけられるよう、キャッシュの設定をモデルと一緒に保存する
     shutil.copy(Path(cfg.data.cache_dir) / "config.json", out / "cache_config.json")
@@ -142,11 +182,24 @@ def main(cfg: DictConfig) -> None:
     )
     print(f"fold {cfg.fold}: train {len(train_ds)}, valid {len(valid_ids)}, steps {total}")
 
-    for epoch in range(cfg.train.epochs):
+    ckpt_path = out / "last.pt"
+    start = 0
+    if cfg.train.resume and ckpt_path.exists():
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        model.load_state_dict(ckpt["model"])
+        opt.load_state_dict(ckpt["opt"])
+        sched.load_state_dict(ckpt["sched"])
+        start = ckpt["epoch"] + 1
+        print(f"resumed from epoch {ckpt['epoch']}")
+
+    for epoch in range(start, cfg.train.epochs):
         model.train()
         t0, losses = time.time(), []
         for batch in train_loader:
             batch = to_device(batch, device)
+            batch["images"] = random_affine(
+                batch["images"], cfg.train.aug.rotate_deg, cfg.train.aug.scale, cfg.train.aug.shift
+            )
             batch["images"] = jitter_intensity(batch["images"], cfg.train.intensity_jitter)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(batch)
@@ -159,6 +212,16 @@ def main(cfg: DictConfig) -> None:
             losses.append(loss.item())
 
         log = {"epoch": epoch, "train_loss": float(np.mean(losses)), "time": time.time() - t0}
+        # 評価(メモリを最も使う)の前に保存し、そこで落ちても学習済みの重みを残す
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "opt": opt.state_dict(),
+                "sched": sched.state_dict(),
+                "epoch": epoch,
+            },
+            ckpt_path,
+        )
         last = epoch == cfg.train.epochs - 1
         if last or (epoch + 1) % cfg.eval.every == 0:
             kind = "full" if last else "quick"
@@ -167,6 +230,13 @@ def main(cfg: DictConfig) -> None:
                 preds[name] = predict(model, loaders[kind], device)
                 auc, per[name] = macro_auc(truth[name].loc[preds[name].index], preds[name])
                 log[f"{name}_auc"] = auc
+                if name == "valid":
+                    # 疑似ラベルの「記載なし」セルを除いた AUC(記載なしを陰性扱いしない版)
+                    log["valid_auc_addressed"], _ = macro_auc(
+                        truth[name].loc[preds[name].index],
+                        preds[name],
+                        mask=addressed.loc[preds[name].index],
+                    )
             log["eval"] = kind
         print(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in log.items()}))
         with open(out / "log.jsonl", "a") as f:
@@ -179,6 +249,8 @@ def main(cfg: DictConfig) -> None:
     for name in eval_sets:
         preds[name].to_csv(out / files[name], index_label="StudyInstanceUID")
         summary |= {f"{name}_auc": log[f"{name}_auc"], f"{name}_per_label": per[name]}
+    if "valid_auc_addressed" in log:
+        summary["valid_auc_addressed"] = log["valid_auc_addressed"]
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
 
 

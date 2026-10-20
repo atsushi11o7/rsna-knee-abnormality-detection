@@ -7,6 +7,8 @@ data:
   series_csv: data/csv/train_series.csv
   train_csv: data/csv/train.csv
   label_source: steven_v4
+  fold_label_source: steven_v4   # fold の層化に使うラベル(学習ラベルを変えても fold を固定する)
+  fold_seed: 42
   silent_weight: 0.5
   n_folds: 5
   limit: 0         # デバッグ用。先頭 N Study だけ使う
@@ -22,6 +24,11 @@ train:
   warmup_ratio: 0.05
   grad_clip: 1.0
   intensity_jitter: 0.1
+  aug:              # 空間方向の拡張(0 なら無効)
+    rotate_deg: 0
+    scale: 0
+    shift: 0
+  resume: false     # true なら出力先の last.pt から再開する
 
 eval:
   num_workers: 4
