@@ -25,6 +25,7 @@ class KneeModel(nn.Module):
         agg = dict(aggregator or {})
         cls = {"transformer": StudyAggregator, "mil": MILAggregator}[agg.pop("type", "transformer")]
         self.aggregator = cls(dim=dim, **agg)
+        self.eval_chunk = 256  # 推論時に一度にエンコードする窓の数
 
     def forward(self, batch: dict) -> torch.Tensor:
         """推論する。
@@ -39,7 +40,12 @@ class KneeModel(nn.Module):
         images, mask = batch["images"], batch["mask"]
         b, k = mask.shape
         # パディングの窓はエンコーダに通さない(評価時は Study ごとの窓数の差が大きい)
-        valid = self.encoder(images[mask])
+        windows = images[mask]
+        if self.training:
+            valid = self.encoder(windows)
+        else:
+            # 推論では Study によって窓数が大きく違うので、分割してエンコードしメモリを抑える
+            valid = torch.cat([self.encoder(c) for c in windows.split(self.eval_chunk)])
         feats = valid.new_zeros(b, k, valid.shape[-1])
         feats[mask] = valid
         return self.aggregator(feats, batch["plane"], batch["fat_sup"], batch["rel_pos"], mask)

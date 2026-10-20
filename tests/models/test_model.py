@@ -67,3 +67,13 @@ def test_both_aggregators_ignore_padding(agg):
         }
         out = m(padded)
     assert out.shape == (1, 12) and torch.allclose(ref, out, atol=1e-5)
+
+
+def test_eval_chunking_matches_single_pass(model):
+    batch = _batch(k_valid=(5, 3))
+    with torch.no_grad():
+        ref = model(batch)
+        model.eval_chunk = 2
+        out = model(batch)
+        model.eval_chunk = 256
+    assert torch.allclose(ref, out, atol=1e-5)
