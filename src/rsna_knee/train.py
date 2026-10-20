@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader
 
 from rsna_knee.data.dataset import KneeStudyDataset, build_index, collate
 from rsna_knee.data.folds import make_folds
+from rsna_knee.labels.blend import distill, load_oof
 from rsna_knee.labels.public import TARGETS, load_gold, load_source, load_train_labels
 from rsna_knee.metrics import macro_auc
 from rsna_knee.models.model import KneeModel
@@ -137,6 +138,12 @@ def main(cfg: DictConfig) -> None:
         pd.read_csv(cfg.data.train_csv), fold_y.loc[y.index], cfg.data.n_folds, cfg.data.fold_seed
     )
     addressed = load_source(cfg.data.label_source).addressed.loc[y.index]
+    # 評価の正解は元のラベルのまま。蒸留したラベルは学習にだけ使う
+    y_train = y
+    if cfg.data.distill_from:
+        oof = load_oof(Path(cfg.data.distill_from), cfg.data.n_folds)
+        y_train = distill(y, oof, cfg.data.distill_alpha)
+        y_train.to_csv(out / "distilled_labels.csv", index_label="StudyInstanceUID")
     folds.to_csv(out / "folds.csv")
     # 推論時に同じ前処理をかけられるよう、キャッシュの設定をモデルと一緒に保存する
     shutil.copy(Path(cfg.data.cache_dir) / "config.json", out / "cache_config.json")
@@ -146,7 +153,7 @@ def main(cfg: DictConfig) -> None:
     train_ids = list(folds.index[folds != cfg.fold])
     valid_ids = list(folds.index[folds == cfg.fold])
     train_ds = KneeStudyDataset(
-        train_ids, index, y, w, train=True, n_windows=cfg.train.n_windows, drop_missing=True
+        train_ids, index, y_train, w, train=True, n_windows=cfg.train.n_windows, drop_missing=True
     )
     train_loader = DataLoader(
         train_ds,

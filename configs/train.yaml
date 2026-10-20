@@ -9,6 +9,8 @@ data:
   label_source: steven_v4
   fold_label_source: steven_v4   # fold の層化に使うラベル(学習ラベルを変えても fold を固定する)
   fold_seed: 42
+  distill_from: null    # 自己蒸留: 全 fold の OOF がある実験の出力先(例: outputs/<exp_name>)
+  distill_alpha: 0.5    # 元のラベルの比率
   silent_weight: 0.5
   n_folds: 5
   limit: 0         # デバッグ用。先頭 N Study だけ使う
