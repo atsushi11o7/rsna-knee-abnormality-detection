@@ -238,7 +238,10 @@ def main(cfg: DictConfig) -> None:
                         mask=addressed.loc[preds[name].index],
                     )
             log["eval"] = kind
-        print(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in log.items()}))
+        print(
+            json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in log.items()}),
+            flush=True,
+        )
         with open(out / "log.jsonl", "a") as f:
             f.write(json.dumps(log) + "\n")
 
