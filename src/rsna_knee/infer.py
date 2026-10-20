@@ -124,7 +124,8 @@ def run(
         print(f"WARNING: {len(missing)} studies have no readable series; using 0.5", flush=True)
 
     preds = []
-    for d in model_dirs:
+    # 全 Study の前処理に失敗した場合でも、推論を飛ばして 0.5 の提出ファイルは書く
+    for d in model_dirs if present else []:
         model, cfg = load_model(d, device)
         ds = KneeStudyDataset(
             present,
@@ -145,9 +146,10 @@ def run(
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    pred = sum(preds) / len(preds)
     sub = pd.DataFrame(0.5, index=study_ids, columns=TARGETS)
-    sub.loc[present] = pred.loc[present].values
+    if preds:
+        pred = sum(preds) / len(preds)
+        sub.loc[present] = pred.loc[present].values
     sub.index.name = "StudyInstanceUID"
     sub.to_csv(out)
     print(f"wrote {out}: {len(sub)} rows, {len(missing)} fallback, {time.time() - t0:.0f}s total")

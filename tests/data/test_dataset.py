@@ -98,3 +98,20 @@ def test_weights_default_to_one(tmp_path):
     y = pd.DataFrame([[0.5] * 12], index=["study"])
     item = KneeStudyDataset(["study"], index, targets=y, train=False)[0]
     assert torch.equal(item["weight"], torch.ones(12))
+
+
+def test_build_index_handles_cache_where_every_series_failed(tmp_path):
+    from rsna_knee.data.dataset import build_index
+
+    pd.DataFrame(
+        {"StudyInstanceUID": ["st"], "SeriesInstanceUID": ["se"], "ok": [False], "error": ["x"]}
+    ).to_parquet(tmp_path / "test_series_meta.parquet")
+    pd.DataFrame(
+        {
+            "StudyInstanceUID": ["st"],
+            "SeriesInstanceUID": ["se"],
+            "Anatomical_Plane": ["Axial"],
+            "Fat_Suppression": [1],
+        }
+    ).to_csv(tmp_path / "test_series.csv", index=False)
+    assert build_index(tmp_path, tmp_path / "test_series.csv", "test") == {}

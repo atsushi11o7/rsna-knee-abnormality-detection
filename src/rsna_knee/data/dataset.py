@@ -48,6 +48,8 @@ def build_index(cache_dir: Path, series_csv: Path, split: str) -> dict[str, list
         StudyInstanceUID → SeriesRef のリスト。失敗・空のシリーズは含まない。
     """
     meta = pd.read_parquet(cache_dir / f"{split}_series_meta.parquet")
+    if "n_slices" not in meta:  # 全シリーズで前処理に失敗すると、この列自体が作られない
+        return {}
     meta = meta[meta.ok & (meta.n_slices > 0)]
     info = pd.read_csv(series_csv).set_index("SeriesInstanceUID")
     index: dict[str, list[SeriesRef]] = {}
