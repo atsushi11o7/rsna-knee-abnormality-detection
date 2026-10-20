@@ -44,6 +44,7 @@ model:
     out_dim: 384
     pretrained: true
     grad_checkpointing: false
+    pool: cls_mean       # cls_mean / cls_mean_topk
   aggregator:
     type: transformer   # transformer / mil(mil は n_layers, n_heads を使わない)
     n_layers: 2

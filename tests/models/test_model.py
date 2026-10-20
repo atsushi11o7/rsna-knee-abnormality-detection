@@ -77,3 +77,10 @@ def test_eval_chunking_matches_single_pass(model):
         out = model(batch)
         model.eval_chunk = 256
     assert torch.allclose(ref, out, atol=1e-5)
+
+
+def test_topk_pool_runs():
+    m = KneeModel(ENCODER | {"pool": "cls_mean_topk"}, {"type": "mil", "dropout": 0.0}).eval()
+    assert m.encoder.proj[0].num_features == 3 * m.encoder.backbone.num_features
+    with torch.no_grad():
+        assert m(_batch()).shape == (2, 12)

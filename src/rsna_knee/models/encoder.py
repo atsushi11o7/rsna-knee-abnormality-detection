@@ -21,6 +21,8 @@ class WindowEncoder(nn.Module):
         pretrained: 事前学習済みの重みを使うか。
         pretrained_file: 重みファイルのパス。オフライン環境(Kaggle 提出時)で使う。
         grad_checkpointing: メモリ節約のため、ブロックごとに勾配チェックポイントを使う。
+        pool: 窓特徴の作り方。"cls_mean" は CLS とパッチ平均、"cls_mean_topk" はそれに
+            チャネルごとのパッチ上位 1/8 の平均を足す(小さな所見が平均で薄まるのを補う)。
     """
 
     def __init__(
@@ -31,6 +33,7 @@ class WindowEncoder(nn.Module):
         pretrained: bool = True,
         pretrained_file: str | None = None,
         grad_checkpointing: bool = False,
+        pool: str = "cls_mean",
     ):
         super().__init__()
         overlay = {"file": pretrained_file} if pretrained_file else None
@@ -50,7 +53,11 @@ class WindowEncoder(nn.Module):
         # DINOv2 の特徴は全 Study に共通する成分が大きく(Study 間のコサイン類似度 0.93)、
         # 窓ごとの LayerNorm では差が残らず集約後の出力が一定値に潰れた。
         # BatchNorm で次元ごとに標準化し、Study 間の差を取り出す
-        self.proj = nn.Sequential(nn.BatchNorm1d(2 * dim), nn.Linear(2 * dim, out_dim))
+        if pool not in ("cls_mean", "cls_mean_topk"):
+            raise ValueError(f"unknown pool: {pool}")
+        self.pool = pool
+        n_parts = 3 if pool == "cls_mean_topk" else 2
+        self.proj = nn.Sequential(nn.BatchNorm1d(n_parts * dim), nn.Linear(n_parts * dim, out_dim))
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """窓をエンコードする。
@@ -68,5 +75,10 @@ class WindowEncoder(nn.Module):
         tokens = self.backbone.forward_features(x)
         n_prefix = self.backbone.num_prefix_tokens
         # ACL や半月板などの局所所見は CLS に残りにくいので、パッチ平均も併用する
-        feat = torch.cat([tokens[:, 0], tokens[:, n_prefix:].mean(1)], dim=-1)
+        patch = tokens[:, n_prefix:]
+        parts = [tokens[:, 0], patch.mean(1)]
+        if self.pool == "cls_mean_topk":
+            k = max(1, patch.shape[1] // 8)
+            parts.append(patch.topk(k, dim=1).values.mean(1))
+        feat = torch.cat(parts, dim=-1)
         return self.proj(feat)
