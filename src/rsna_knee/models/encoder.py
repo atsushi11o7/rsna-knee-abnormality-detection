@@ -1,0 +1,84 @@
+"""2.5D 窓(3 スライス)を特徴ベクトルに変換する 2D エンコーダ。"""
+
+from __future__ import annotations
+
+import timm
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+
+class WindowEncoder(nn.Module):
+    """timm の ViT で窓ごとの特徴を出す。
+
+    uint8 の窓を受け取り、GPU 上でリサイズと正規化をしてからエンコーダに通す。
+    出力は CLS とパッチ平均の連結を `out_dim` に射影したもの。
+
+    Args:
+        backbone: timm のモデル名。
+        img_size: エンコーダへの入力サイズ。DINOv2 はパッチ 14 なので 14 の倍数にする。
+        out_dim: 出力の次元。
+        pretrained: 事前学習済みの重みを使うか。
+        pretrained_file: 重みファイルのパス。オフライン環境(Kaggle 提出時)で使う。
+        grad_checkpointing: メモリ節約のため、ブロックごとに勾配チェックポイントを使う。
+        pool: 窓特徴の作り方。"cls_mean" は CLS とパッチ平均、"cls_mean_topk" はそれに
+            チャネルごとのパッチ上位 1/8 の平均を足す(小さな所見が平均で薄まるのを補う)。
+    """
+
+    def __init__(
+        self,
+        backbone: str = "vit_small_patch14_dinov2.lvd142m",
+        img_size: int = 224,
+        out_dim: int = 384,
+        pretrained: bool = True,
+        pretrained_file: str | None = None,
+        grad_checkpointing: bool = False,
+        pool: str = "cls_mean",
+    ):
+        super().__init__()
+        overlay = {"file": pretrained_file} if pretrained_file else None
+        self.backbone = timm.create_model(
+            backbone,
+            pretrained=pretrained,
+            pretrained_cfg_overlay=overlay,
+            num_classes=0,
+            img_size=img_size,
+        )
+        self.backbone.set_grad_checkpointing(grad_checkpointing)
+        self.img_size = img_size
+        cfg = self.backbone.pretrained_cfg
+        self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
+        dim = self.backbone.num_features
+        # DINOv2 の特徴は全 Study に共通する成分が大きく(Study 間のコサイン類似度 0.93)、
+        # 窓ごとの LayerNorm では差が残らず集約後の出力が一定値に潰れた。
+        # BatchNorm で次元ごとに標準化し、Study 間の差を取り出す
+        if pool not in ("cls_mean", "cls_mean_topk"):
+            raise ValueError(f"unknown pool: {pool}")
+        self.pool = pool
+        n_parts = 3 if pool == "cls_mean_topk" else 2
+        self.proj = nn.Sequential(nn.BatchNorm1d(n_parts * dim), nn.Linear(n_parts * dim, out_dim))
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """窓をエンコードする。
+
+        Args:
+            images: (N, 3, H, W) uint8。
+
+        Returns:
+            (N, out_dim) の特徴。
+        """
+        x = images.float() / 255.0
+        if x.shape[-1] != self.img_size:
+            x = F.interpolate(x, size=self.img_size, mode="bilinear", antialias=True)
+        x = (x - self.mean) / self.std
+        tokens = self.backbone.forward_features(x)
+        n_prefix = self.backbone.num_prefix_tokens
+        # ACL や半月板などの局所所見は CLS に残りにくいので、パッチ平均も併用する
+        patch = tokens[:, n_prefix:]
+        parts = [tokens[:, 0], patch.mean(1)]
+        if self.pool == "cls_mean_topk":
+            k = max(1, patch.shape[1] // 8)
+            parts.append(patch.topk(k, dim=1).values.mean(1))
+        feat = torch.cat(parts, dim=-1)
+        return self.proj(feat)

@@ -1,0 +1,60 @@
+exp_name: baseline
+fold: 0            # -1 なら全データで学習(OOF なし)
+seed: 42
+
+data:
+  cache_dir: data/cache/v2
+  series_csv: data/csv/train_series.csv
+  train_csv: data/csv/train.csv
+  label_source: steven_v4
+  fold_label_source: steven_v4   # fold の層化に使うラベル(学習ラベルを変えても fold を固定する)
+  fold_seed: 42
+  distill_from: null    # 自己蒸留: 全 fold の OOF がある実験の出力先(例: outputs/<exp_name>)
+  distill_alpha: 0.5    # 元のラベルの比率
+  silent_weight: 0.5
+  n_folds: 5
+  limit: 0         # デバッグ用。先頭 N Study だけ使う
+
+train:
+  epochs: 12
+  batch_size: 8
+  n_windows: 32
+  num_workers: 6
+  lr: 3.0e-4       # 集約部分
+  encoder_lr: 3.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.05
+  grad_clip: 1.0
+  intensity_jitter: 0.1
+  aug:              # 空間方向の拡張(0 なら無効)
+    rotate_deg: 0
+    scale: 0
+    shift: 0
+  resume: false     # true なら出力先の last.pt から再開する
+
+eval:
+  num_workers: 4
+  batch_size: 8
+  windows_per_series: 16        # 最終エポックの評価(OOF 保存)
+  quick_windows_per_series: 4   # 途中経過の評価
+  every: 3                      # 途中経過を測るエポック間隔
+
+model:
+  encoder:
+    backbone: vit_small_patch14_dinov2.lvd142m
+    img_size: 224
+    out_dim: 384
+    pretrained: true
+    grad_checkpointing: false
+    pool: cls_mean       # cls_mean / cls_mean_topk
+  aggregator:
+    type: transformer   # transformer / mil(mil は n_layers, n_heads を使わない)
+    n_layers: 2
+    n_heads: 6
+    dropout: 0.1
+
+hydra:
+  run:
+    dir: outputs/${exp_name}/fold${fold}
+  job:
+    chdir: false
